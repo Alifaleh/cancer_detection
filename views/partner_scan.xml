@@ -19,7 +19,8 @@
                         
                             <group>
                                 <field name="cancer_type"/>
-                                <field name="npy_file"/>
+                                <field name="file_type"/>
+                                <field name="scan_file"/>
                                 <field name="classification"/>
                                 <field name="create_date"/>
                             </group>

@@ -16,6 +16,10 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Conv2D, MaxPooling2D, Activation, Dropout, Flatten, Dense
 from tensorflow.keras.preprocessing import image
 from tensorflow.keras.optimizers import SGD
+import zipfile
+import shutil
+import math
+
 
 workspace = f'{os.path.dirname(__file__)}/workspace'
 weights_file_path = f'{os.path.dirname(__file__)}/weight/weights3d_lnet.hdf5'
@@ -37,17 +41,29 @@ class PartnerScan(models.Model):
     cancer_type = fields.Selection([('lung', 'Lung'), ('liver', 'Liver')])
 
     partner_id = fields.Many2one('res.partner',string='Patient')
-    npy_file = fields.Binary()
+    file_type = fields.Selection([('npy', 'NPY'), ('dcm', 'DCM')])
+    scan_file = fields.Binary()
     classification = fields.Char(compute="_compute_classification",string = "Status", store=True, readonly=True)
 
-    @api.onchange('npy_file')
-    @api.constrains('npy_file')
+    @api.onchange('scan_file')
+    @api.constrains('scan_file')
     def _compute_classification(self):
         for rec in self:
-            if rec.npy_file:
-                open(f'{workspace}/input.npy', 'wb').write(base64.b64decode(rec.npy_file))
+            if rec.scan_file:
+                scan_file = base64.b64decode(rec.scan_file)
+                if rec.file_type == 'dcm':
+                    open(f'{workspace}/input.zip', 'wb').write(scan_file)
+                    with zipfile.ZipFile(f'{workspace}/input.zip', 'r') as zip_ref:
+                        zip_ref.extractall(f'{workspace}/input')
+                    os.remove(f'{workspace}/input.zip')
+                    self.dcm2npy()
+                    shutil.rmtree(f'{workspace}/input')
+                elif rec.file_type == 'npy':
+                    open(f'{workspace}/input.npy', 'wb').write(scan_file)
+                    
                 input_array = self.npy2nparray()
                 os.remove(f'{workspace}/input.npy')
+
 
                 # the following if statements used for multi cancer detection
                 if rec.cancer_type == 'lung':
@@ -74,6 +90,40 @@ class PartnerScan(models.Model):
                 xtest.append(xx)
         xtest=np.array(xtest)
         return xtest
+
+
+    def chunks(self, l, n):
+        for i in range(0, len(l), n):
+            yield l[i:i + n]
+
+
+    def mean(self, a):
+        return sum(a) / len(a)
+
+
+    def dcm2npy(self):
+        IMG_SIZE_PX=64
+        SLICE_COUNT=64
+        hm_slices=64
+        data_dir = f'{workspace}/'
+        patients = [filename for filename in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir,filename))]
+        for num,patient in enumerate(patients):
+            path = data_dir + patient
+            slices = [dicom.read_file(path + '/' + s) for s in os.listdir(path)]
+            slices.sort(key = lambda x: int(x.ImagePositionPatient[2]))
+
+            new_slices = []
+            slices = [cv2.resize(np.array(each_slice.pixel_array),(IMG_SIZE_PX,IMG_SIZE_PX)) for each_slice in slices]
+            chunk_sizes = math.ceil(len(slices) / hm_slices)
+            for slice_chunk in self.chunks(slices, chunk_sizes):
+                    slice_chunk = list(map(self.mean, zip(*slice_chunk)))
+                    new_slices.append(slice_chunk)
+                    xxxx=np.array(new_slices)
+ 
+        yyyy=cv2.resize(xxxx,(64,64))    
+        np.save(f'{workspace}/input.npy'.format(IMG_SIZE_PX,IMG_SIZE_PX,SLICE_COUNT), yyyy)    
+
+
 
 #########################################################################
 ############################# Models ####################################
