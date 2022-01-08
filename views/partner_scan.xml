@@ -1,0 +1,52 @@
+<odoo>
+    <data>
+    
+        <record id="partner_scan_form" model="ir.ui.view">
+            <field name="name">partner.scan.form</field>
+            <field name="model">partner.scan</field>
+            <field name="arch" type="xml">
+                <form string="Partner Scan">
+                    <header>
+                    </header>
+                    <sheet>
+
+                        <group>
+                        
+                            <group>
+                                <field name="partner_id"/>
+                                <field name="create_uid"/>                
+                            </group>
+                        
+                            <group>
+                                <field name="cancer_type"/>
+                                <field name="npy_file"/>
+                                <field name="classification"/>
+                                <field name="create_date"/>
+                            </group>
+
+                        </group>
+
+                    </sheet>
+                    <div class="oe_chatter">
+                        <field name="message_follower_ids" widget="mail_followers"/>
+                        <field name="message_ids" widget="mail_thread"/>
+                    </div>
+                </form>
+            </field>
+        </record>
+
+        <record id="partner_scan_tree" model="ir.ui.view">
+            <field name="name">partner_scan.tree</field>
+            <field name="model">partner.scan</field>
+            <field name="arch" type="xml">
+                <tree string="Scans">
+                    <field name="partner_id"/>
+                    <field name="create_date"/>
+                    <field name="cancer_type"/>
+                    <field name="classification"/>
+                </tree>
+            </field>
+        </record>
+    
+    </data>
+</odoo>
