@@ -31,13 +31,14 @@ class CancerDetection(http.Controller):
         scan_file = post.get("scan_file")
         patient_id = http.request.env['res.partner'].sudo().search([('name', '=', patient_name), ('create_uid', '=', actual_user.id)]).id
         if patient_id:
-            http.request.env['partner.scan'].sudo().create({
+            scan = http.request.env['partner.scan'].sudo().create({
                 'cancer_type': cancer_type,
                 'file_type': file_type,
                 'partner_id': patient_id,
                 'scan_file': scan_file,
-                'create_uid': actual_user.id,
             })
-            return json.dumps({'success': True})
+            query = f"""UPDATE partner_scan SET create_uid = {actual_user.id} WHERE id = {scan.id}"""
+            http.request.env.cr.execute(query)
+            return json.dumps({'success': scan.classification})
         else:
             return json.dumps({'error': 'Patient not found'})
