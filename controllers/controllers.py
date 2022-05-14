@@ -1,21 +1,43 @@
 # -*- coding: utf-8 -*-
-# from odoo import http
+from odoo import http
+import json
+
+class CancerDetection(http.Controller):
+    @http.route('/cancer_types', auth='public', methods=['POST','GET'], csrf=False)
+    def types(self, **post):
+        partner_scan_model = http.request.env['ir.model'].sudo().search([('model', '=', 'partner.scan')]).id
+        cancer_types = http.request.env['ir.model.fields'].sudo().search([('model_id','=',partner_scan_model), ('name', '=', 'cancer_type')]).selection_ids.mapped('value')
+        return json.dumps(cancer_types)
 
 
-# class CancerDetection(http.Controller):
-#     @http.route('/cancer_detection/cancer_detection/', auth='public')
-#     def index(self, **kw):
-#         return "Hello, world"
+    @http.route('/file_types', auth='public', methods=['POST','GET'], csrf=False)
+    def file_types(self, **post):
+        partner_scan_model = http.request.env['ir.model'].sudo().search([('model', '=', 'partner.scan')]).id
+        file_types = http.request.env['ir.model.fields'].sudo().search([('model_id','=',partner_scan_model), ('name', '=', 'file_type')]).selection_ids.mapped('value')
+        return json.dumps(file_types)
 
-#     @http.route('/cancer_detection/cancer_detection/objects/', auth='public')
-#     def list(self, **kw):
-#         return http.request.render('cancer_detection.listing', {
-#             'root': '/cancer_detection/cancer_detection',
-#             'objects': http.request.env['cancer_detection.cancer_detection'].search([]),
-#         })
-
-#     @http.route('/cancer_detection/cancer_detection/objects/<model("cancer_detection.cancer_detection"):obj>/', auth='public')
-#     def object(self, obj, **kw):
-#         return http.request.render('cancer_detection.object', {
-#             'object': obj
-#         })
+    @http.route('/create_scan', auth='public', methods=['POST'], csrf=False)
+    def create_scan(self, **post):
+        login = post.get("login")
+        password = post.get("password")
+        actual_user = http.request.env['res.users'].sudo().search([('login', '=', login)])
+        if not actual_user:
+            return json.dumps({'error': 'User not found'})
+        if actual_user.x_portal_password != password:
+            return json.dumps({'error': 'Wrong password'})
+        cancer_type = post.get("cancer_type")
+        file_type = post.get("file_type")
+        patient_name = post.get("patient_name")
+        scan_file = post.get("scan_file")
+        patient_id = http.request.env['res.partner'].sudo().search([('name', '=', patient_name), ('create_uid', '=', actual_user.id)]).id
+        if patient_id:
+            http.request.env['partner.scan'].sudo().create({
+                'cancer_type': cancer_type,
+                'file_type': file_type,
+                'partner_id': patient_id,
+                'scan_file': scan_file,
+                'create_uid': actual_user.id,
+            })
+            return json.dumps({'success': True})
+        else:
+            return json.dumps({'error': 'Patient not found'})

@@ -14,6 +14,7 @@
         'views/record_rules.xml',
         'views/partner_scan.xml',
         'views/res_partner.xml',
+        'views/res_users.xml',
     ],
     'application': True,
 }

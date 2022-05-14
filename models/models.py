@@ -35,6 +35,11 @@ class ResPartnerExt(models.Model):
     gender = fields.Selection([('male', 'Male'), ('female', 'Female')])
     age = fields.Integer()
 
+class ResUser(models.Model):
+    _inherit = "res.users"
+
+    x_portal_password = fields.Char(string='Portal Password')
+
 class PartnerScan(models.Model):
     _name = 'partner.scan'
     _description = 'partner scan'
