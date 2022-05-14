@@ -243,7 +243,7 @@ class PartnerScan(models.Model):
 
     def get_lung_result(self, model, input_array):
         result = model.predict(input_array)
-        if result [0][0] < result[0][1]:
+        if result [0][0] > result[0][1]:
             prediction = 'Cancer Detected'
         else: 
             prediction = 'Normal'
