@@ -27,6 +27,17 @@
 
                         </group>
 
+                        <notebook>
+                            <page name='sigmentation_images' string='Sigmentation Images'>
+                                <field name="sigmentation_image_ids">
+                                    <tree editable="bottom">
+                                        <field name="image" widget="image"/>
+                                        <field name="result"/>
+                                    </tree>
+                                </field>
+                            </page>
+                        </notebook>
+
                     </sheet>
                     <div class="oe_chatter">
                         <field name="message_follower_ids" widget="mail_followers"/>

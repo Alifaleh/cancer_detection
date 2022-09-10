@@ -23,8 +23,39 @@ import shutil
 import math
 
 
+
+import random
+from PIL import Image
+import cv2
+from tqdm import tqdm_notebook, tnrange
+from glob import glob
+from itertools import chain
+from skimage.io import imread, imshow, concatenate_images
+from skimage.transform import resize
+from skimage.morphology import label
+from sklearn.model_selection import train_test_split
+
+from skimage.color import rgb2gray
+from tensorflow.keras import Input
+from tensorflow.keras.models import Model, load_model, save_model
+from tensorflow.keras.layers import Input, Activation, BatchNormalization, Dropout, Lambda, Conv2D, Conv2DTranspose, MaxPooling2D, concatenate
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+
+from tensorflow.keras import backend as K
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+
+from tensorflow.keras.layers import Conv2D, BatchNormalization, Activation, MaxPool2D, Conv2DTranspose, Concatenate, Input
+from tensorflow.keras.models import Model
+
+from matplotlib import pyplot as plt
+
+
 workspace = f'{os.path.dirname(__file__)}/workspace'
 lung_weights_file_path = f'{os.path.dirname(__file__)}/weight/lung.hdf5'
+lung_sigmentation_file_path = f'{os.path.dirname(__file__)}/weight/lung_sigmentation_256.hdf5'
+brain_sigmentation_file_path = f'{os.path.dirname(__file__)}/weight/brain_sigmentation_256.hdf5'
 brain_weights_file_path = f'{os.path.dirname(__file__)}/weight/brain.h5'
 
 
@@ -47,12 +78,14 @@ class PartnerScan(models.Model):
     _inherit = ['mail.thread']
 
     # cancer type used in multi cancer
-    cancer_type = fields.Selection([('lung', 'Lung'), ('brain', 'Brain')])
+    cancer_type = fields.Selection([('lung', 'Lung'), ('lung_sigment', 'Lung Sigmentation'), ('brain', 'Brain'), ('brain_sigment', 'Brain Sigmentation')])
 
     partner_id = fields.Many2one('res.partner',string='Patient')
-    file_type = fields.Selection([('npy', 'NPY'), ('dcm', 'DCM'), ('jpg', 'JPG')])
+    file_type = fields.Selection([('npy', 'NPY'), ('dcm', 'DCM'), ('jpg', 'JPG / TIF')])
     scan_file = fields.Binary()
     classification = fields.Char(compute="_compute_classification",string = "Status", store=True, readonly=True)
+
+    sigmentation_image_ids = fields.One2many('sigment.image', 'scan_id')
 
     @api.onchange('scan_file')
     @api.constrains('scan_file')
@@ -80,6 +113,23 @@ class PartnerScan(models.Model):
                     prediction = self.get_lung_result(model, input_array)
 
 
+                elif rec.cancer_type == 'lung_sigment':
+                    if rec.file_type == 'jpg':
+                        open(f'{workspace}/input.zip', 'wb').write(scan_file)
+                        with zipfile.ZipFile(f'{workspace}/input.zip', 'r') as zip_ref:
+                            zip_ref.extractall(f'{workspace}/input_jpg')
+                        os.remove(f'{workspace}/input.zip')
+
+                    files = os.listdir(f'{workspace}/input_jpg')
+                    for index, file in enumerate(files):
+                        files[index] = f'{workspace}/input_jpg/{file}'
+                    df = pd.DataFrame(data={"filename": files})
+
+                    model = self.build_lung_unet()
+                    prediction = self.get_lung_sigmentation_result(model, df)
+                    shutil.rmtree(f'{workspace}/input_jpg')
+
+
                 elif rec.cancer_type == 'brain':
                     if rec.file_type == 'dcm':
                         open(f'{workspace}/input.zip', 'wb').write(scan_file)
@@ -100,6 +150,23 @@ class PartnerScan(models.Model):
                     model = self.build_brain_model()
                     prediction = self.get_brain_result(model, dg)
                     shutil.rmtree(f'{workspace}/input_jpg')
+
+        
+                elif rec.cancer_type == 'brain_sigment':
+                    if rec.file_type == 'jpg':
+                        open(f'{workspace}/input.zip', 'wb').write(scan_file)
+                        with zipfile.ZipFile(f'{workspace}/input.zip', 'r') as zip_ref:
+                            zip_ref.extractall(f'{workspace}/input_tif')
+                        os.remove(f'{workspace}/input.zip')
+
+                    files = os.listdir(f'{workspace}/input_tif')
+                    for index, file in enumerate(files):
+                        files[index] = f'{workspace}/input_tif/{file}'
+                    df = pd.DataFrame(data={"filename": files})
+
+                    model = self.build_brain_unet()
+                    prediction = self.get_brain_sigmentation_result(model, df)
+                    shutil.rmtree(f'{workspace}/input_tif')
 
                 
                 rec.classification = prediction
@@ -250,6 +317,145 @@ class PartnerScan(models.Model):
         return prediction
 
 
+###################### Lung Cancer Sigmentation ##########################
+
+    smooth=100
+
+    def dice_coef(self, y_true, y_pred):
+        y_truef=K.flatten(y_true)
+        y_predf=K.flatten(y_pred)
+        And=K.sum(y_truef* y_predf)
+        return((2* And + self.smooth) / (K.sum(y_truef) + K.sum(y_predf) + self.smooth))
+
+    def dice_coef_loss(self, y_true, y_pred):
+        return -self.dice_coef(y_true, y_pred)
+
+    def iou(self, y_true, y_pred):
+        intersection = K.sum(y_true * y_pred)
+        sum_ = K.sum(y_true + y_pred)
+        jac = (intersection + self.smooth) / (sum_ - intersection + self.smooth)
+        return jac
+
+    def jac_distance(self, y_true, y_pred):
+        y_truef=K.flatten(y_true)
+        y_predf=K.flatten(y_pred)
+
+        return - self.iou(y_true, y_pred)
+
+
+    def conv_block(self, input, num_filters):
+        x = Conv2D(num_filters, 3, padding="same")(input)
+        x = BatchNormalization()(x)
+        x = Activation("relu")(x)
+
+        x = Conv2D(num_filters, 3, padding="same")(x)
+        x = BatchNormalization()(x)
+        x = Activation("relu")(x)
+
+        return x
+
+    def encoder_block(self, input, num_filters):
+        x = self.conv_block(input, num_filters)
+        p = MaxPool2D((2, 2),padding="same")(x)
+        return x, p
+
+    def decoder_block(self, input, skip_features, num_filters):
+        x = Conv2DTranspose(num_filters, (2, 2), strides=2, padding="same")(input)
+        x = Concatenate()([x, skip_features])
+        x = self.conv_block(x, num_filters)
+        return x
+
+    def build_lung_unet(self):
+        return load_model(lung_sigmentation_file_path, custom_objects={'dice_coef_loss': self.dice_coef_loss, 'iou': self.iou, 'dice_coef': self.dice_coef})
+    
+    def build_brain_unet(self):
+        return load_model(brain_sigmentation_file_path, custom_objects={'dice_coef_loss': self.dice_coef_loss, 'iou': self.iou, 'dice_coef': self.dice_coef})
+
+    def get_lung_sigmentation_result(self, model, df):
+        im_height = 256
+        im_width = 256
+        output_dir = f'{workspace}/output_png'
+        os.mkdir(output_dir)
+
+        results = []
+
+        for i in range(len(df)):
+            img = cv2.imread(df['filename'].iloc[i])
+            img = cv2.resize(img ,(im_height, im_width))
+            img = img / 255
+            img = img[np.newaxis, :, :, :]
+            pred=model.predict(img)
+
+            if pred.round().astype(int).sum() != 0:
+                results.append("Cancer Detected")
+            else:
+                results.append("Normal")
+
+            fig = plt.figure(figsize=(12,4))
+            fig.add_subplot(1,3,1)
+            plt.imshow(np.squeeze(img)) 
+            plt.title('Original Image')
+
+            fig.add_subplot(1,3,3)
+            plt.imshow(np.squeeze(pred) > .5)
+            plt.title('Prediction')
+            fig.savefig(output_dir + '/fig'+ str(i) + '.png')
+
+        if self.classification == "No Npy File":
+            files = os.listdir(f'{workspace}/output_png')
+            for index, file in enumerate(files):
+                current_file = f'{workspace}/output_png/{file}'
+                current_file = open(current_file, 'rb')
+                current_image = current_file.read()
+                encoded_string = base64.b64encode(current_image)
+                current_file.close()
+                self.env['sigment.image'].create({'scan_id': self.id, 'image': encoded_string, 'result': results[index]})
+        shutil.rmtree(f'{workspace}/output_png')
+        return "Sigmentation Completed"
+
+
+    def get_brain_sigmentation_result(self, model, df):
+        im_height = 256
+        im_width = 256
+        output_dir = f'{workspace}/output_png'
+        os.mkdir(output_dir)
+
+        results = []
+
+        for i in range(len(df)):
+            img = cv2.imread(df['filename'].iloc[i])
+            img = cv2.resize(img ,(im_height, im_width))
+            img = img / 255
+            img = img[np.newaxis, :, :, :]
+            pred=model.predict(img)
+
+            if pred.round().astype(int).sum() != 0:
+                results.append("Cancer Detected")
+            else:
+                results.append("Normal")
+
+            fig = plt.figure(figsize=(12,4))
+            fig.add_subplot(1,3,1)
+            plt.imshow(np.squeeze(img)) 
+            plt.title('Original Image')
+
+            fig.add_subplot(1,3,3)
+            plt.imshow(np.squeeze(pred) > .5)
+            plt.title('Prediction')
+            fig.savefig(output_dir + '/fig'+ str(i) + '.png')
+
+        if self.classification == "No Npy File":
+            files = os.listdir(f'{workspace}/output_png')
+            for index, file in enumerate(files):
+                current_file = f'{workspace}/output_png/{file}'
+                current_file = open(current_file, 'rb')
+                current_image = current_file.read()
+                encoded_string = base64.b64encode(current_image)
+                current_file.close()
+                self.env['sigment.image'].create({'scan_id': self.id, 'image': encoded_string, 'result': results[index]})
+        shutil.rmtree(f'{workspace}/output_png')
+        return "Sigmentation Completed"
+
 ########################### Brain cancer model ###########################
 
     def build_brain_model(self):
@@ -282,3 +488,12 @@ class PartnerScan(models.Model):
 
         prediction = 'Tumor Detected'
         return prediction
+
+
+class SigmentationImage(models.Model):
+    _name = 'sigment.image'
+    _description = 'Sigment Image'
+
+    scan_id = fields.Many2one('partner.scan', string='scan')
+    image = fields.Binary(attachment=True)
+    result = fields.Char()
